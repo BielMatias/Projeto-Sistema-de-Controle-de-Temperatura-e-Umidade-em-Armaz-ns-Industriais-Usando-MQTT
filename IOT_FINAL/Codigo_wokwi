@@ -1,0 +1,112 @@
+#include "DHTesp.h"
+#include <LiquidCrystal_I2C.h>
+#include <WiFi.h>
+#include <WiFiClientSecure.h> // Para conexão segura
+#include <PubSubClient.h>
+
+// Credenciais do Wi-Fi
+const char* ssid = "Wokwi-GUEST"; // Substitua pelo seu Wi-Fi, se necessário
+const char* senha = "";
+
+// Configurações do HiveMQ Cloud
+const char* server = "d2e90d886fc84b7c954c729472bb3723.s1.eu.hivemq.cloud"; // Host do cluster
+const unsigned int port = 8883; // Porta segura para MQTT
+const char* mqttUser = "*********"; // Substitua pelo usuário configurado no HiveMQ Cloud
+const char* mqttPassword = "**********"; // Substitua pela senha configurada no HiveMQ Cloud
+
+// Configurações do DHT22 e LCD
+const int PINO_DHT = 15;
+DHTesp sensorDHT;
+LiquidCrystal_I2C tela(0x27, 16, 2);
+
+// Configuração do MQTT
+WiFiClientSecure secureClient;
+PubSubClient mqttClient(secureClient);
+
+String temperatura = "0";
+String umidade = "0";
+String newTemperatura = "";
+String newUmidade = "";
+int contador = 0;
+
+void setup() {
+  Serial.begin(115200);
+
+  // Configuração do LCD
+  tela.init();
+  tela.backlight();
+
+  // Configuração do sensor DHT
+  sensorDHT.setup(PINO_DHT, DHTesp::DHT22);
+
+  // Conexão ao Wi-Fi
+  Serial.print("Conectando ao Wi-Fi");
+  WiFi.begin(ssid, senha);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nConectado ao Wi-Fi!");
+
+  // Configuração do MQTT
+  secureClient.setInsecure(); // Ignora validação de certificado para simplificar
+  mqttClient.setServer(server, port);
+
+  // Conexão ao MQTT
+  Serial.print("Conectando ao MQTT");
+  while (!mqttClient.connected()) {
+    if (mqttClient.connect("ESP32Client", mqttUser, mqttPassword)) {
+      Serial.println("\nConectado ao MQTT!");
+    } else {
+      Serial.print(".");
+      delay(2000);
+    }
+  }
+}
+
+void loop() {
+  contador++;
+
+  // Leitura do sensor DHT
+  TempAndHumidity dados = sensorDHT.getTempAndHumidity();
+  newTemperatura = String(dados.temperature, 2);
+  newUmidade = String(dados.humidity, 1);
+
+  // Atualiza o LCD apenas quando necessário
+  if (newTemperatura != temperatura || newUmidade != umidade) {
+    temperatura = newTemperatura;
+    umidade = newUmidade;
+    resetarTela();
+    enviarDadosTela();
+  }
+
+  // Envia os dados para o broker MQTT a cada 5 ciclos
+  if (contador == 5) {
+    enviarDadosMqtt(temperatura, umidade);
+    contador = 0;
+  }
+
+  Serial.println("Temperatura: " + temperatura + "°C | Umidade: " + umidade + "%");
+  delay(1000);
+}
+
+void enviarDadosTela() {
+  tela.setCursor(0, 0);
+  tela.print("Temp: " + temperatura + "C");
+  tela.setCursor(0, 1);
+  tela.print("Umidade: " + umidade + "%");
+}
+
+void resetarTela() {
+  tela.setCursor(0, 0);
+  tela.print("                ");
+  tela.setCursor(0, 1);
+  tela.print("                ");
+}
+
+void enviarDadosMqtt(String temperatura, String umidade) {
+  char mensagem[128];
+  sprintf(mensagem, "{\"temperatura\": \"%s\", \"umidade\": \"%s\"}", temperatura.c_str(), umidade.c_str());
+  mqttClient.publish("Mackenzie/Gabriel", mensagem);
+  Serial.println("Dados enviados: " + String(mensagem));
+}
